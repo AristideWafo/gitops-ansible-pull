@@ -63,6 +63,7 @@ mkdir -p "$ANSIBLE_DIR"
 chown ubuntu:ubuntu "$ANSIBLE_DIR"
 
 log "[6/6] Configuration de Git et exécution d'ansible-pull (${ANSIBLE_BRANCH})"
+export HOME=/root
 git config --global --add safe.directory "${ANSIBLE_DIR}"
 ansible-pull \
   -d "$ANSIBLE_DIR" \
