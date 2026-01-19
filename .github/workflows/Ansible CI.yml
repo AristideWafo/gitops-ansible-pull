@@ -17,7 +17,7 @@ on:
 
 env:
   AWS_REGION: us-east-1
-  ANSIBLE_VERSION: "9.0"
+  ANSIBLE_VERSION: "12.3.0"
 
 permissions:
     id-token: write
