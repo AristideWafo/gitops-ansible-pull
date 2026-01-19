@@ -1,0 +1,160 @@
+name: Ansible CI
+
+on:
+    push:
+        branches:
+            - prod
+            - "feat/**"
+            - "fix/**"
+        paths:
+            - "ansible/**"
+            - ".github/workflows/Ansible CI.yml"
+    pull_request:
+        branches:
+            - prod
+        paths:
+            - "ansible/**"
+
+env:
+    AWS_REGION: us-east-1
+    ANSIBLE_VERSION: 2.15
+
+permissions:
+    id-token: write
+    contents: read
+    pull-requests: write
+
+jobs:
+    ansible-lint:
+        name: Ansible Lint & Syntax Check
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Setup Python
+              uses: actions/setup-python@v5
+              with:
+                  python-version: "3.11"
+                  cache: "pip"
+
+            - name: Install Ansible
+              run: |
+                  pip install ansible==${{ env.ANSIBLE_VERSION }}
+                  pip install ansible-lint yamllint
+
+            - name: YAML Lint
+              run: |
+                  yamllint ansible/
+              continue-on-error: true
+
+            - name: Ansible Lint
+              run: |
+                  cd ansible
+                  ansible-lint --force-color
+              continue-on-error: true
+
+            - name: Ansible Syntax Check
+              run: |
+                  cd ansible
+                  if [ -f "playbook.yml" ]; then
+                    ansible-playbook playbook.yml --syntax-check
+                  elif [ -f "site.yml" ]; then
+                    ansible-playbook site.yml --syntax-check
+                  else
+                    echo "No main playbook found (playbook.yml or site.yml)"
+                    exit 0
+                  fi
+
+    ansible-test:
+        name: Ansible Test (Dry Run)
+        needs: ansible-lint
+        if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/prod')
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Configure AWS credentials
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                  role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+                  aws-region: ${{ env.AWS_REGION }}
+                  role-session-name: GitHubActions-Ansible-Test
+
+            - name: Setup Python
+              uses: actions/setup-python@v5
+              with:
+                  python-version: "3.11"
+
+            - name: Install Ansible & Dependencies
+              run: |
+                  pip install ansible==${{ env.ANSIBLE_VERSION }}
+                  pip install boto3 botocore
+
+            - name: Ansible Check Mode (Dry Run)
+              run: |
+                  cd ansible
+                  if [ -f "playbook.yml" ]; then
+                    ansible-playbook playbook.yml --check --diff
+                  elif [ -f "site.yml" ]; then
+                    ansible-playbook site.yml --check --diff
+                  else
+                    echo "No main playbook found"
+                  fi
+              continue-on-error: true
+
+    # ansible-deploy:
+    #     name: Ansible Deploy to Production
+    #     needs: ansible-lint
+    #     if: github.ref == 'refs/heads/prod' && github.event_name == 'push'
+    #     runs-on: ubuntu-latest
+
+    #     steps:
+    #         - name: Checkout code
+    #           uses: actions/checkout@v4
+
+    #         - name: Configure AWS credentials
+    #           uses: aws-actions/configure-aws-credentials@v4
+    #           with:
+    #               role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+    #               aws-region: ${{ env.AWS_REGION }}
+    #               role-session-name: GitHubActions-Ansible-Deploy
+
+    #         - name: Setup Python
+    #           uses: actions/setup-python@v5
+    #           with:
+    #               python-version: "3.11"
+
+    #         - name: Install Ansible & Dependencies
+    #           run: |
+    #               pip install ansible==${{ env.ANSIBLE_VERSION }}
+    #               pip install boto3 botocore
+
+    #         - name: Download Terraform Outputs
+    #           uses: actions/download-artifact@v4
+    #           with:
+    #               name: terraform-outputs
+    #               path: ./terraform-outputs
+    #           continue-on-error: true
+
+    #         - name: Run Ansible Playbook
+    #           run: |
+    #               cd ansible
+    #               if [ -f "playbook.yml" ]; then
+    #                 ansible-playbook playbook.yml -v
+    #               elif [ -f "site.yml" ]; then
+    #                 ansible-playbook site.yml -v
+    #               else
+    #                 echo "No main playbook found"
+    #                 exit 1
+    #               fi
+
+    #         - name: Deployment Summary
+    #           if: success()
+    #           run: |
+    #               echo "✅ Ansible deployment completed successfully on production"
+    #               echo "Branch: ${{ github.ref }}"
+    #               echo "Commit: ${{ github.sha }}"

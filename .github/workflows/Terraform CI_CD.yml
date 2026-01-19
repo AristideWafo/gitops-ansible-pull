@@ -1,0 +1,143 @@
+name: Terraform CI/CD
+
+on:
+    push:
+        branches:
+            - prod
+            - "feat/**"
+            - "fix/**"
+        paths:
+            - "terraform/**"
+            - ".github/workflows/Terraform CI_CD.yml"
+    pull_request:
+        branches:
+            - prod
+        paths:
+            - "terraform/**"
+
+env:
+    AWS_REGION: us-east-1
+    TF_VERSION: 1.6.0
+
+permissions:
+    id-token: write
+    contents: read
+    pull-requests: write
+
+jobs:
+    terraform-validate:
+        name: Terraform Validate & Plan
+        runs-on: ubuntu-latest
+        defaults:
+            run:
+                working-directory: ./terraform
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Configure AWS credentials
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                  role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+                  aws-region: ${{ env.AWS_REGION }}
+                  role-session-name: GitHubActions-Terraform
+
+            - name: Setup Terraform
+              uses: hashicorp/setup-terraform@v3
+              with:
+                  terraform_version: ${{ env.TF_VERSION }}
+
+            - name: Terraform Format Check
+              id: fmt
+              run: terraform fmt -check -recursive
+              continue-on-error: true
+
+            - name: Terraform Init
+              id: init
+              run: terraform init
+
+            - name: Terraform Validate
+              id: validate
+              run: terraform validate -no-color
+
+            - name: Terraform Plan
+              id: plan
+              run: terraform plan -no-color -input=false
+              continue-on-error: true
+
+            - name: Comment PR with Plan
+              if: github.event_name == 'pull_request'
+              uses: actions/github-script@v7
+              with:
+                  script: |
+                      const output = `#### Terraform Format and Style 🖌\`${{ steps.fmt.outcome }}\`
+                      #### Terraform Initialization ⚙️\`${{ steps.init.outcome }}\`
+                      #### Terraform Validation 🤖\`${{ steps.validate.outcome }}\`
+                      #### Terraform Plan 📖\`${{ steps.plan.outcome }}\`
+
+                      <details><summary>Show Plan</summary>
+
+                      \`\`\`terraform
+                      ${{ steps.plan.outputs.stdout }}
+                      \`\`\`
+
+                      </details>
+
+                      *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+
+                      github.rest.issues.createComment({
+                        issue_number: context.issue.number,
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        body: output
+                      })
+
+            - name: Terraform Plan Status
+              if: steps.plan.outcome == 'failure'
+              run: exit 1
+
+    terraform-apply:
+        name: Terraform Apply
+        needs: terraform-validate
+        if: github.ref == 'refs/heads/prod' && github.event_name == 'push'
+        runs-on: ubuntu-latest
+        defaults:
+            run:
+                working-directory: ./terraform
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Configure AWS credentials
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                  role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+                  aws-region: ${{ env.AWS_REGION }}
+                  role-session-name: GitHubActions-Terraform-Apply
+
+            - name: Setup Terraform
+              uses: hashicorp/setup-terraform@v3
+              with:
+                  terraform_version: ${{ env.TF_VERSION }}
+
+            - name: Terraform Init
+              run: terraform init
+
+            - name: Terraform Apply
+              run: terraform apply -auto-approve -input=false
+
+            - name: Terraform Output
+              id: output
+              run: terraform output -json
+
+            - name: Save Outputs
+              run: echo '${{ steps.output.outputs.stdout }}' > terraform-outputs.json
+
+            - name: Upload Outputs as Artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: terraform-outputs
+                  path: terraform/terraform-outputs.json
+                  retention-days: 30
