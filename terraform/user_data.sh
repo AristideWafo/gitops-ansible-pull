@@ -1,4 +1,3 @@
-pip3 install ansible
 #!/bin/bash
 set -e
 
