@@ -60,16 +60,17 @@ chmod 0644 /etc/ansible/role.conf
 
 log "[5/6] Préparation du répertoire ${ANSIBLE_DIR}"
 mkdir -p "$ANSIBLE_DIR"
-chown root:root "$ANSIBLE_DIR"
+chown ubuntu:ubuntu "$ANSIBLE_DIR"
 
-log "[6/6] Exécution d'ansible-pull (${ANSIBLE_BRANCH})"
+log "[6/6] Configuration de Git et exécution d'ansible-pull (${ANSIBLE_BRANCH})"
+git config --global --add safe.directory "${ANSIBLE_DIR}"
 ansible-pull \
   -d "$ANSIBLE_DIR" \
   -U "$ANSIBLE_REPO" \
   -C "$ANSIBLE_BRANCH" \
   -i localhost, \
   -e "instance_role=$ROLE" \
-  playbooks/site.yml
+  ansible/playbooks/site.yml
 
 if [ -f "$ANSIBLE_DIR/systemd/ansible-pull.service" ] && [ -f "$ANSIBLE_DIR/systemd/ansible-pull.timer" ]; then
   log "Activation du timer systemd ansible-pull"
@@ -80,7 +81,7 @@ if [ -f "$ANSIBLE_DIR/systemd/ansible-pull.service" ] && [ -f "$ANSIBLE_DIR/syst
 else
   log "Timer systemd introuvable, configuration d'un cron toutes les 15 minutes"
   cat <<EOF >/etc/cron.d/ansible-pull
-*/15 * * * * root ansible-pull -d ${ANSIBLE_DIR} -U ${ANSIBLE_REPO} -C ${ANSIBLE_BRANCH} -i localhost, -e "instance_role=${ROLE}" playbooks/site.yml >> /var/log/ansible-pull.log 2>&1
+*/15 * * * * ubuntu ansible-pull -d ${ANSIBLE_DIR} -U ${ANSIBLE_REPO} -C ${ANSIBLE_BRANCH} -i localhost, -e "instance_role=${ROLE}" ansible/playbooks/site.yml >> /var/log/ansible-pull.log 2>&1
 EOF
   chmod 0644 /etc/cron.d/ansible-pull
 fi

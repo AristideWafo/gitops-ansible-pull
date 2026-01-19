@@ -47,6 +47,14 @@
         group: root
         mode: "0644"
 
+    - name: Ensure motd directory exists
+      file:
+        path: /etc/motd.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
     - name: Ensure motd mentions current role
       copy:
         dest: /etc/motd.d/99-role
