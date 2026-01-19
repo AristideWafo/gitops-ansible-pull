@@ -75,7 +75,7 @@ sudo -u ${USER} ansible-pull \
   -e "instance_role=$ROLE" \
   ansible/playbooks/site.yml
 
-if [ -f "$ANSIBLE_DIR/systemd/ansible-pull.service" ] && [ -f "$ANSIBLE_DIR/systemd/ansible-pull.timer" ]; then
+if [ -f "$ANSIBLE_DIR/ansible/systemd/ansible-pull.service" ] && [ -f "$ANSIBLE_DIR/ansible/systemd/ansible-pull.timer" ]; then
   log "Activation du timer systemd ansible-pull"
   cp "$ANSIBLE_DIR/ansible/systemd/ansible-pull.timer" /etc/systemd/system/
   cp "$ANSIBLE_DIR/ansible/systemd/ansible-pull.service" /etc/systemd/system/
