@@ -1,81 +1,89 @@
+pip3 install ansible
 #!/bin/bash
 set -e
+
+export DEBIAN_FRONTEND=noninteractive
+
+ANSIBLE_REPO="${ANSIBLE_REPO:-https://github.com/AristideWafo/gitops-ansible-pull.git}"
+ANSIBLE_BRANCH="${ANSIBLE_BRANCH:-prod}"
+ANSIBLE_DIR="${ANSIBLE_DIR:-/opt/ansible}"
+ANSIBLE_VERSION="${ANSIBLE_VERSION:-10.7.0}"
 
 # Logs visibles via cloud-init-output.log
 exec > >(tee /var/log/user-data.log) 2>&1
 
-echo "=========================================="
-echo "Démarrage de la configuration de l'instance"
-echo "=========================================="
+log() {
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"
+}
 
-# 1. Dépendances de base
-echo "[1/7] Installation des dépendances..."
+log "==== Initialisation de l'instance ===="
+
+log "[1/6] Installation des dépendances système"
 apt-get update -y
-apt-get install -y software-properties-common git python3-pip curl jq
+apt-get install -y --no-install-recommends \
+  software-properties-common \
+  git \
+  python3-pip \
+  curl \
+  jq
 
-# 2. Installation Ansible
-echo "[2/7] Installation d'Ansible..."
-pip3 install ansible
+log "[2/6] Installation d'Ansible ${ANSIBLE_VERSION}"
+pip3 install --upgrade pip
+pip3 install "ansible==${ANSIBLE_VERSION}"
 
-# 3. Récupération du tag Name depuis les métadonnées EC2
-echo "[3/7] Récupération du rôle de l'instance..."
-TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null)
-INSTANCE_ID=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null)
-REGION=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region 2>/dev/null)
+log "[3/6] Lecture des métadonnées EC2"
+TOKEN=$(curl -fs -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" || true)
 
-# Récupération du tag Role de l'instance
-ROLE=$(aws ec2 describe-tags \
-  --region "$REGION" \
-  --filters "Name=resource-id,Values=$INSTANCE_ID" "Name=key,Values=Role" \
-  --query "Tags[0].Value" \
-  --output text 2>/dev/null || echo "unknown")
+metadata() {
+  local path="$1"
+  if [ -n "$TOKEN" ]; then
+    curl -fs "http://169.254.169.254/latest/meta-data/${path}" -H "X-aws-ec2-metadata-token: ${TOKEN}" || true
+  else
+    curl -fs "http://169.254.169.254/latest/meta-data/${path}" || true
+  fi
+}
 
-echo "Instance ID: $INSTANCE_ID"
-echo "Region: $REGION"
-echo "Role détecté: $ROLE"
+INSTANCE_ID=$(metadata "instance-id")
+REGION=$(metadata "placement/region")
+ROLE=$(metadata "tags/instance/Role")
 
-# 4. Configuration du rôle pour Ansible
-echo "[4/7] Configuration du rôle Ansible..."
+if [ -z "$ROLE" ] || [ "$ROLE" = "NotFound" ]; then
+  ROLE=$(metadata "tags/instance/Name")
+fi
+
+ROLE=${ROLE:-unknown}
+log "Instance ID: ${INSTANCE_ID:-n/a} | Region: ${REGION:-n/a} | Role: ${ROLE}"
+
+log "[4/6] Création du fichier de rôle"
 mkdir -p /etc/ansible
-echo "role=$ROLE" > /etc/ansible/role.conf
-chmod 644 /etc/ansible/role.conf
+printf "role=%s\n" "$ROLE" > /etc/ansible/role.conf
+chmod 0644 /etc/ansible/role.conf
 
-cat /etc/ansible/role.conf
-echo "Fichier de configuration créé: /etc/ansible/role.conf"
+log "[5/6] Préparation du répertoire ${ANSIBLE_DIR}"
+mkdir -p "$ANSIBLE_DIR"
+chown root:root "$ANSIBLE_DIR"
 
-# 5. Répertoire de travail Ansible
-echo "[5/7] Création du répertoire de travail..."
-mkdir -p /opt/ansible
-chown root:root /opt/ansible
-
-# 6. Premier run Ansible Pull
-echo "[6/7] Exécution d'Ansible Pull..."
+log "[6/6] Exécution d'ansible-pull (${ANSIBLE_BRANCH})"
 ansible-pull \
-  -d /opt/ansible \
-  -U https://github.com/AristideWafo/gitops-ansible-pull.git \
-  -C main \
+  -d "$ANSIBLE_DIR" \
+  -U "$ANSIBLE_REPO" \
+  -C "$ANSIBLE_BRANCH" \
   -i localhost, \
   -e "instance_role=$ROLE" \
   playbooks/site.yml
 
-# 7. Configuration du timer systemd pour les exécutions périodiques
-echo "[7/7] Configuration du timer systemd..."
-if [ -f /opt/ansible/systemd/ansible-pull.service ] && [ -f /opt/ansible/systemd/ansible-pull.timer ]; then
-  cp /opt/ansible/systemd/ansible-pull.service /etc/systemd/system/
-  cp /opt/ansible/systemd/ansible-pull.timer /etc/systemd/system/
-
+if [ -f "$ANSIBLE_DIR/systemd/ansible-pull.service" ] && [ -f "$ANSIBLE_DIR/systemd/ansible-pull.timer" ]; then
+  log "Activation du timer systemd ansible-pull"
+  cp "$ANSIBLE_DIR/systemd/ansible-pull.service" /etc/systemd/system/
+  cp "$ANSIBLE_DIR/systemd/ansible-pull.timer" /etc/systemd/system/
   systemctl daemon-reload
   systemctl enable --now ansible-pull.timer
-  echo "Timer systemd configuré et activé"
 else
-  echo "Fichiers systemd non trouvés, configuration manuelle du cron..."
-  # Fallback sur cron si les fichiers systemd ne sont pas présents
-  echo "*/15 * * * * root ansible-pull -d /opt/ansible -U https://github.com/AristideWafo/gitops-ansible-pull.git -C main -i localhost, -e \"instance_role=$ROLE\" playbooks/site.yml >> /var/log/ansible-pull.log 2>&1" > /etc/cron.d/ansible-pull
-  chmod 644 /etc/cron.d/ansible-pull
-  echo "Cron configuré pour exécution toutes les 15 minutes"
+  log "Timer systemd introuvable, configuration d'un cron toutes les 15 minutes"
+  cat <<EOF >/etc/cron.d/ansible-pull
+*/15 * * * * root ansible-pull -d ${ANSIBLE_DIR} -U ${ANSIBLE_REPO} -C ${ANSIBLE_BRANCH} -i localhost, -e "instance_role=${ROLE}" playbooks/site.yml >> /var/log/ansible-pull.log 2>&1
+EOF
+  chmod 0644 /etc/cron.d/ansible-pull
 fi
 
-echo "=========================================="
-echo "Configuration terminée avec succès!"
-echo "Rôle: $ROLE"
-echo "=========================================="
+log "Configuration terminée"

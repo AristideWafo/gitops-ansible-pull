@@ -1,0 +1,58 @@
+---
+- name: Configure local instance via gitops
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: true
+
+  vars:
+    instance_role: "{{ instance_role | default('unknown') }}"
+    base_packages:
+      - ca-certificates
+      - htop
+      - unzip
+    role_packages:
+      Obs:
+        - nginx
+      App:
+        - python3
+      Vault:
+        - jq
+
+  tasks:
+    - name: Refresh apt cache
+      apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install base packages
+      apt:
+        name: "{{ base_packages }}"
+        state: present
+
+    - name: Install role specific packages
+      vars:
+        packages: "{{ role_packages.get(instance_role, []) }}"
+      when: packages | length > 0
+      apt:
+        name: "{{ packages }}"
+        state: present
+
+    - name: Create role marker file
+      copy:
+        dest: /etc/ansible/role.conf
+        content: |
+          role={{ instance_role }}
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Ensure motd mentions current role
+      copy:
+        dest: /etc/motd.d/99-role
+        content: |
+          Managed by Ansible.
+          Current role: {{ instance_role }}
+        owner: root
+        group: root
+        mode: "0644"
