@@ -7,6 +7,7 @@ ANSIBLE_REPO="${ANSIBLE_REPO:-https://github.com/AristideWafo/gitops-ansible-pul
 ANSIBLE_BRANCH="${ANSIBLE_BRANCH:-prod}"
 ANSIBLE_DIR="${ANSIBLE_DIR:-/opt/ansible}"
 ANSIBLE_VERSION="${ANSIBLE_VERSION:-10.7.0}"
+USER="${USER:-ubuntu}"
 
 # Logs visibles via cloud-init-output.log
 exec > >(tee /var/log/user-data.log) 2>&1
@@ -60,12 +61,13 @@ chmod 0644 /etc/ansible/role.conf
 
 log "[5/6] Préparation du répertoire ${ANSIBLE_DIR}"
 mkdir -p "$ANSIBLE_DIR"
-chown ubuntu:ubuntu "$ANSIBLE_DIR"
+chown ${USER}:${USER} "$ANSIBLE_DIR"
 
 log "[6/6] Configuration de Git et exécution d'ansible-pull (${ANSIBLE_BRANCH})"
-export HOME=/root
+export HOME=/home/${USER}
 git config --global --add safe.directory "${ANSIBLE_DIR}"
-ansible-pull \
+
+sudo -u ${USER} ansible-pull \
   -d "$ANSIBLE_DIR" \
   -U "$ANSIBLE_REPO" \
   -C "$ANSIBLE_BRANCH" \
@@ -75,14 +77,14 @@ ansible-pull \
 
 if [ -f "$ANSIBLE_DIR/systemd/ansible-pull.service" ] && [ -f "$ANSIBLE_DIR/systemd/ansible-pull.timer" ]; then
   log "Activation du timer systemd ansible-pull"
-  cp "$ANSIBLE_DIR/systemd/ansible-pull.service" /etc/systemd/system/
-  cp "$ANSIBLE_DIR/systemd/ansible-pull.timer" /etc/systemd/system/
+  cp "$ANSIBLE_DIR/ansible/systemd/ansible-pull.timer" /etc/systemd/system/
+  cp "$ANSIBLE_DIR/ansible/systemd/ansible-pull.service" /etc/systemd/system/
   systemctl daemon-reload
   systemctl enable --now ansible-pull.timer
 else
-  log "Timer systemd introuvable, configuration d'un cron toutes les 15 minutes"
+  log "Timer systemd introuvable, configuration d'un cron toutes les 5 minutes"
   cat <<EOF >/etc/cron.d/ansible-pull
-*/15 * * * * ubuntu ansible-pull -d ${ANSIBLE_DIR} -U ${ANSIBLE_REPO} -C ${ANSIBLE_BRANCH} -i localhost, -e "instance_role=${ROLE}" ansible/playbooks/site.yml >> /var/log/ansible-pull.log 2>&1
+*/5 * * * * ${USER} ansible-pull -d ${ANSIBLE_DIR} -U ${ANSIBLE_REPO} -C ${ANSIBLE_BRANCH} -i localhost, -e "instance_role=${ROLE}" ansible/playbooks/site.yml >> /var/log/ansible-pull.log 2>&1
 EOF
   chmod 0644 /etc/cron.d/ansible-pull
 fi
